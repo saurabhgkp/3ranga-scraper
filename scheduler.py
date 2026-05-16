@@ -1,6 +1,11 @@
 """
 APScheduler — triggers scrape every SCRAPE_INTERVAL_MINUTES and POSTs
 results to the backend ingest endpoint.
+
+Sources:
+  1. JSearch (RapidAPI) — full descriptions, structured data
+  2. JobSpy (web scraping) — free, additional volume from Indeed/Glassdoor/LinkedIn
+Results are deduplicated by titleHash before ingestion.
 """
 
 import datetime
@@ -19,13 +24,10 @@ BACKEND_URL      = os.getenv("BACKEND_URL",              "http://localhost:4000"
 INGEST_SECRET    = os.getenv("INGEST_SECRET",            "internal-scraper-secret")
 INTERVAL_MINUTES = int(os.getenv("SCRAPE_INTERVAL_MINUTES", "240"))
 NUM_PAGES        = int(os.getenv("JSEARCH_PAGES_PER_QUERY",  "10"))  # 10 jobs per page, max=10
+ENABLE_JOBSPY    = os.getenv("ENABLE_JOBSPY", "true").lower() == "true"
 
-# ── Search queries ─────────────────────────────────────────────────────────────
-# Each query = 1 API call = 10 jobs (NUM_PAGES=1).
-# Free tier: 200 req/month → ~6 queries/run at 4-hour interval.
-# Paid tiers allow more queries — increase NUM_PAGES or add more QUERIES.
-
-QUERIES = [
+# ── JSearch queries ────────────────────────────────────────────────────────────
+JSEARCH_QUERIES = [
     "software engineer jobs in Bangalore India",
     "backend frontend developer jobs in Mumbai India",
     "full stack developer jobs in Hyderabad India",
@@ -38,8 +40,26 @@ QUERIES = [
     "product manager ui ux designer tech jobs in India",
 ]
 
-_service = JSearchService()
-_status: dict = {"lastRun": None, "lastCount": 0, "totalQueries": 0, "errors": []}
+# ── JobSpy queries (web scraping — free, additional volume) ────────────────────
+JOBSPY_QUERIES = [
+    {"search_term": "software engineer",         "location": "Bangalore, India"},
+    {"search_term": "full stack developer",      "location": "Mumbai, India"},
+    {"search_term": "backend developer",         "location": "Hyderabad, India"},
+    {"search_term": "frontend developer react",  "location": "Delhi, India"},
+    {"search_term": "devops cloud engineer",     "location": "Pune, India"},
+    {"search_term": "data scientist",            "location": "Bangalore, India"},
+    {"search_term": "java developer",            "location": "India"},
+    {"search_term": "python developer",          "location": "India"},
+    {"search_term": "react node developer",      "location": "India"},
+    {"search_term": "mobile ios android",        "location": "India"},
+]
+
+_jsearch_service = JSearchService()
+_status: dict = {
+    "lastRun": None, "lastCount": 0,
+    "jsearchInserted": 0, "jobspyInserted": 0,
+    "totalQueries": 0, "errors": [],
+}
 
 
 def _ingest(jobs: list) -> int:
@@ -56,31 +76,81 @@ def _ingest(jobs: list) -> int:
 
 
 def run_scrape_job() -> None:
-    logger.info("[scheduler] JSearch scrape started — %d queries × %d page(s)",
-                len(QUERIES), NUM_PAGES)
+    logger.info("[scheduler] Scrape started — JSearch (%d queries) + JobSpy (%s)",
+                len(JSEARCH_QUERIES), "enabled" if ENABLE_JOBSPY else "disabled")
 
-    total_inserted = 0
     errors: list[str] = []
-    queries_done = 0
+    seen_hashes: set[str] = set()
 
-    for query in QUERIES:
+    # ── Phase 1: JSearch ──────────────────────────────────────────────────────
+    jsearch_jobs: list[dict] = []
+    jsearch_queries_done = 0
+
+    for query in JSEARCH_QUERIES:
         try:
-            jobs = _service.search(query, num_pages=NUM_PAGES)
-            inserted = _ingest(jobs)
-            total_inserted += inserted
-            queries_done += 1
-            logger.info("  [%s] → %d inserted", query[:50], inserted)
+            jobs = _jsearch_service.search(query, num_pages=NUM_PAGES)
+            new_jobs = [j for j in jobs if j["titleHash"] not in seen_hashes]
+            for j in new_jobs:
+                seen_hashes.add(j["titleHash"])
+            jsearch_jobs.extend(new_jobs)
+            jsearch_queries_done += 1
+            logger.info("  [jsearch] '%s' → %d new jobs", query[:50], len(new_jobs))
         except Exception as exc:
-            msg = f"{query[:50]}: {exc}"
+            msg = f"jsearch/{query[:40]}: {exc}"
             errors.append(msg)
-            logger.error("  Error — %s", msg)
+            logger.error("  %s", msg)
 
-    _status["lastRun"]      = datetime.datetime.utcnow().isoformat()
-    _status["lastCount"]    = total_inserted
-    _status["totalQueries"] = queries_done
-    _status["errors"]       = errors[-10:]
-    logger.info("[scheduler] Done — %d jobs inserted from %d queries",
-                total_inserted, queries_done)
+    jsearch_inserted = _ingest(jsearch_jobs)
+    logger.info("[scheduler] JSearch done — %d inserted from %d queries",
+                jsearch_inserted, jsearch_queries_done)
+
+    # ── Phase 2: JobSpy ───────────────────────────────────────────────────────
+    jobspy_inserted = 0
+
+    if ENABLE_JOBSPY:
+        try:
+            from scraper_service import ScraperService
+            scraper = ScraperService()
+            jobspy_jobs: list[dict] = []
+
+            for q in JOBSPY_QUERIES:
+                try:
+                    jobs = scraper.scrape(
+                        search_term=q["search_term"],
+                        location=q["location"],
+                        results_per_site=25,
+                        country_indeed="India",
+                        hours_old=24,
+                    )
+                    new_jobs = [j for j in jobs if j["titleHash"] not in seen_hashes]
+                    for j in new_jobs:
+                        seen_hashes.add(j["titleHash"])
+                    jobspy_jobs.extend(new_jobs)
+                    logger.info("  [jobspy] '%s' → %d new jobs", q["search_term"], len(new_jobs))
+                except Exception as exc:
+                    msg = f"jobspy/{q['search_term']}: {exc}"
+                    errors.append(msg)
+                    logger.error("  %s", msg)
+
+            jobspy_inserted = _ingest(jobspy_jobs)
+            logger.info("[scheduler] JobSpy done — %d inserted", jobspy_inserted)
+
+        except ImportError as exc:
+            logger.warning("[scheduler] JobSpy unavailable: %s", exc)
+        except Exception as exc:
+            msg = f"jobspy/fatal: {exc}"
+            errors.append(msg)
+            logger.error("[scheduler] JobSpy fatal: %s", exc)
+
+    total = jsearch_inserted + jobspy_inserted
+    _status["lastRun"]         = datetime.datetime.utcnow().isoformat()
+    _status["lastCount"]       = total
+    _status["jsearchInserted"] = jsearch_inserted
+    _status["jobspyInserted"]  = jobspy_inserted
+    _status["totalQueries"]    = jsearch_queries_done
+    _status["errors"]          = errors[-10:]
+    logger.info("[scheduler] Done — %d total inserted (jsearch=%d, jobspy=%d)",
+                total, jsearch_inserted, jobspy_inserted)
 
 
 def get_status() -> dict:
@@ -93,11 +163,11 @@ def start_scheduler() -> BackgroundScheduler:
         run_scrape_job,
         trigger=IntervalTrigger(minutes=INTERVAL_MINUTES),
         id="scrape_job",
-        name="JSearch India scraper",
+        name="India job scraper (JSearch + JobSpy)",
         replace_existing=True,
         max_instances=1,
     )
     scheduler.start()
-    logger.info("Scheduler started — every %d min, %d queries per run",
-                INTERVAL_MINUTES, len(QUERIES))
+    logger.info("Scheduler started — every %d min, %d jsearch + %d jobspy queries",
+                INTERVAL_MINUTES, len(JSEARCH_QUERIES), len(JOBSPY_QUERIES) if ENABLE_JOBSPY else 0)
     return scheduler
