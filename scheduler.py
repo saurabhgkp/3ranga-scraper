@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 BACKEND_URL   = os.getenv("BACKEND_URL",   "http://localhost:4000")
 INGEST_SECRET = os.getenv("INGEST_SECRET", "internal-scraper-secret")
-INTERVAL_MINUTES  = int(os.getenv("SCRAPE_INTERVAL_MINUTES",  "30"))
+INTERVAL_MINUTES  = int(os.getenv("SCRAPE_INTERVAL_MINUTES",  "240"))
 RESULTS_PER_SITE  = int(os.getenv("SCRAPE_RESULTS_PER_SITE",  "50"))
 
 # ── Search matrix ──────────────────────────────────────────────────────────────
