@@ -4,8 +4,8 @@ results to the backend ingest endpoint.
 
 Sources:
   1. JSearch (RapidAPI) — full descriptions, structured data
-  2. JobSpy (web scraping) — free, additional volume from Indeed/Glassdoor/LinkedIn
-Results are deduplicated by titleHash before ingestion.
+  2. JobSpy (web scraping) — Indeed + Glassdoor + LinkedIn, 30+ query terms
+Both sources deduplicate by titleHash; no duplicate is ever sent to the DB.
 """
 
 import datetime
@@ -23,10 +23,10 @@ logger = logging.getLogger(__name__)
 BACKEND_URL      = os.getenv("BACKEND_URL",              "http://localhost:4000")
 INGEST_SECRET    = os.getenv("INGEST_SECRET",            "internal-scraper-secret")
 INTERVAL_MINUTES = int(os.getenv("SCRAPE_INTERVAL_MINUTES", "240"))
-NUM_PAGES        = int(os.getenv("JSEARCH_PAGES_PER_QUERY",  "10"))  # 10 jobs per page, max=10
+NUM_PAGES        = int(os.getenv("JSEARCH_PAGES_PER_QUERY",  "10"))  # 10 jobs/page, max=10
 ENABLE_JOBSPY    = os.getenv("ENABLE_JOBSPY", "true").lower() == "true"
 
-# ── JSearch queries ────────────────────────────────────────────────────────────
+# ── JSearch queries (RapidAPI — full descriptions) ─────────────────────────────
 JSEARCH_QUERIES = [
     "software engineer jobs in Bangalore India",
     "backend frontend developer jobs in Mumbai India",
@@ -40,18 +40,49 @@ JSEARCH_QUERIES = [
     "product manager ui ux designer tech jobs in India",
 ]
 
-# ── JobSpy queries (web scraping — free, additional volume) ────────────────────
+# ── JobSpy queries (web scraping — Indeed + Glassdoor + LinkedIn) ──────────────
 JOBSPY_QUERIES = [
-    {"search_term": "software engineer",         "location": "Bangalore, India"},
-    {"search_term": "full stack developer",      "location": "Mumbai, India"},
-    {"search_term": "backend developer",         "location": "Hyderabad, India"},
-    {"search_term": "frontend developer react",  "location": "Delhi, India"},
-    {"search_term": "devops cloud engineer",     "location": "Pune, India"},
-    {"search_term": "data scientist",            "location": "Bangalore, India"},
-    {"search_term": "java developer",            "location": "India"},
-    {"search_term": "python developer",          "location": "India"},
-    {"search_term": "react node developer",      "location": "India"},
-    {"search_term": "mobile ios android",        "location": "India"},
+    # TECH
+    {"search_term": "Software Engineer"},
+    {"search_term": "Full Stack Developer"},
+    {"search_term": "Backend Developer"},
+    {"search_term": "Frontend Developer"},
+    {"search_term": "Node.js Developer"},
+    {"search_term": "React Developer"},
+    {"search_term": "Python Developer"},
+    {"search_term": "Java Developer"},
+    {"search_term": "Go Developer"},
+    {"search_term": "DevOps Engineer"},
+    # QA
+    {"search_term": "QA Engineer"},
+    {"search_term": "Automation Tester"},
+    # DATA
+    {"search_term": "Data Scientist"},
+    {"search_term": "Data Analyst"},
+    {"search_term": "Machine Learning Engineer"},
+    # DESIGN
+    {"search_term": "UI UX Designer"},
+    # PM
+    {"search_term": "Product Manager"},
+    # SALES
+    {"search_term": "Sales Representative"},
+    {"search_term": "Business Development Manager"},
+    # MARKETING
+    {"search_term": "Digital Marketing Manager"},
+    {"search_term": "SEO Specialist"},
+    # HR
+    {"search_term": "HR Recruiter"},
+    {"search_term": "Talent Acquisition Specialist"},
+    # MOBILE
+    {"search_term": "Android Developer"},
+    {"search_term": "iOS Developer"},
+    # CLOUD
+    {"search_term": "Cloud Engineer AWS"},
+    {"search_term": "Kubernetes DevOps Engineer"},
+    # SENIOR
+    {"search_term": "Senior Software Engineer"},
+    {"search_term": "Engineering Manager"},
+    {"search_term": "Tech Lead"},
 ]
 
 _jsearch_service = None  # initialised lazily on first run
@@ -69,16 +100,17 @@ def _ingest(jobs: list) -> int:
         f"{BACKEND_URL}/api/jobs/ingest",
         json={"jobs": jobs},
         headers={"x-scraper-secret": INGEST_SECRET},
-        timeout=60,
+        timeout=120,
     )
     resp.raise_for_status()
-    return resp.json().get("inserted", 0)
+    data = resp.json()
+    return data.get("inserted", 0)
 
 
 def run_scrape_job() -> None:
     global _jsearch_service
-    logger.info("[scheduler] Scrape started — JSearch (%d queries) + JobSpy (%s)",
-                len(JSEARCH_QUERIES), "enabled" if ENABLE_JOBSPY else "disabled")
+    logger.info("[scheduler] Scrape started — JSearch (%d queries) + JobSpy (%s, %d queries)",
+                len(JSEARCH_QUERIES), "on" if ENABLE_JOBSPY else "off", len(JOBSPY_QUERIES))
 
     errors: list[str] = []
     seen_hashes: set[str] = set()
@@ -94,7 +126,7 @@ def run_scrape_job() -> None:
         logger.error("[scheduler] JSearch disabled — %s", exc)
         errors.append(f"jsearch/init: {exc}")
 
-    for query in JSEARCH_QUERIES if _jsearch_service else []:
+    for query in (JSEARCH_QUERIES if _jsearch_service else []):
         try:
             jobs = _jsearch_service.search(query, num_pages=NUM_PAGES)
             new_jobs = [j for j in jobs if j["titleHash"] not in seen_hashes]
@@ -102,7 +134,7 @@ def run_scrape_job() -> None:
                 seen_hashes.add(j["titleHash"])
             jsearch_jobs.extend(new_jobs)
             jsearch_queries_done += 1
-            logger.info("  [jsearch] '%s' → %d new jobs", query[:50], len(new_jobs))
+            logger.info("  [jsearch] '%s' → %d new", query[:50], len(new_jobs))
         except Exception as exc:
             msg = f"jsearch/{query[:40]}: {exc}"
             errors.append(msg)
@@ -119,29 +151,20 @@ def run_scrape_job() -> None:
         try:
             from scraper_service import ScraperService
             scraper = ScraperService()
-            jobspy_jobs: list[dict] = []
+            jobspy_jobs = scraper.scrape_all(
+                queries=JOBSPY_QUERIES,
+                location="India",
+                country_indeed="India",
+                batch_size=5,
+            )
+            # filter out hashes already covered by JSearch
+            new_jobspy = [j for j in jobspy_jobs if j["titleHash"] not in seen_hashes]
+            for j in new_jobspy:
+                seen_hashes.add(j["titleHash"])
 
-            for q in JOBSPY_QUERIES:
-                try:
-                    jobs = scraper.scrape(
-                        search_term=q["search_term"],
-                        location=q["location"],
-                        results_per_site=25,
-                        country_indeed="India",
-                        hours_old=24,
-                    )
-                    new_jobs = [j for j in jobs if j["titleHash"] not in seen_hashes]
-                    for j in new_jobs:
-                        seen_hashes.add(j["titleHash"])
-                    jobspy_jobs.extend(new_jobs)
-                    logger.info("  [jobspy] '%s' → %d new jobs", q["search_term"], len(new_jobs))
-                except Exception as exc:
-                    msg = f"jobspy/{q['search_term']}: {exc}"
-                    errors.append(msg)
-                    logger.error("  %s", msg)
-
-            jobspy_inserted = _ingest(jobspy_jobs)
-            logger.info("[scheduler] JobSpy done — %d inserted", jobspy_inserted)
+            jobspy_inserted = _ingest(new_jobspy)
+            logger.info("[scheduler] JobSpy done — %d inserted (%d dupes skipped)",
+                        jobspy_inserted, len(jobspy_jobs) - len(new_jobspy))
 
         except ImportError as exc:
             logger.warning("[scheduler] JobSpy unavailable: %s", exc)
@@ -157,7 +180,7 @@ def run_scrape_job() -> None:
     _status["jobspyInserted"]  = jobspy_inserted
     _status["totalQueries"]    = jsearch_queries_done
     _status["errors"]          = errors[-10:]
-    logger.info("[scheduler] Done — %d total inserted (jsearch=%d, jobspy=%d)",
+    logger.info("[scheduler] Done — %d total (jsearch=%d jobspy=%d)",
                 total, jsearch_inserted, jobspy_inserted)
 
 
@@ -176,6 +199,6 @@ def start_scheduler() -> BackgroundScheduler:
         max_instances=1,
     )
     scheduler.start()
-    logger.info("Scheduler started — every %d min, %d jsearch + %d jobspy queries",
-                INTERVAL_MINUTES, len(JSEARCH_QUERIES), len(JOBSPY_QUERIES) if ENABLE_JOBSPY else 0)
+    logger.info("Scheduler started — every %d min | jsearch=%d queries | jobspy=%d queries",
+                INTERVAL_MINUTES, len(JSEARCH_QUERIES), len(JOBSPY_QUERIES))
     return scheduler
