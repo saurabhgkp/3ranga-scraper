@@ -127,7 +127,7 @@ class ScraperService:
                     search_term=search_term,
                     location=location,
                     results_wanted=results_per_site,
-                    hours_old=72,
+                    hours_old=5,
                     **extra,
                     **proxy_settings,
                 )
