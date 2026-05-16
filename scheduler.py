@@ -11,44 +11,35 @@ import httpx
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
-from scraper_service import ScraperService
+from jsearch_service import JSearchService
 
 logger = logging.getLogger(__name__)
 
 BACKEND_URL      = os.getenv("BACKEND_URL",              "http://localhost:4000")
 INGEST_SECRET    = os.getenv("INGEST_SECRET",            "internal-scraper-secret")
 INTERVAL_MINUTES = int(os.getenv("SCRAPE_INTERVAL_MINUTES", "240"))
-RESULTS_PER_SITE = int(os.getenv("SCRAPE_RESULTS_PER_SITE", "15"))
+NUM_PAGES        = int(os.getenv("JSEARCH_PAGES_PER_QUERY",  "1"))   # 10 jobs per page
 
-# ── Focused search matrix ──────────────────────────────────────────────────────
-# Kept intentionally small so linkedin_fetch_description=True (which makes one
-# extra HTTP request per job) stays under ~1,000 description fetches per run.
-# 10 terms × 6 locations × 15 results × 3 sites = 2,700 raw → ~800–1,200 unique
+# ── Search queries ─────────────────────────────────────────────────────────────
+# Each query = 1 API call = 10 jobs (NUM_PAGES=1).
+# Free tier: 200 req/month → ~6 queries/run at 4-hour interval.
+# Paid tiers allow more queries — increase NUM_PAGES or add more QUERIES.
 
-SEARCH_TERMS = [
-    "software engineer",
-    "backend developer",
-    "frontend developer",
-    "full stack developer",
-    "react developer",
-    "python developer",
-    "devops engineer",
-    "data scientist",
-    "machine learning engineer",
-    "mobile developer",
+QUERIES = [
+    "software engineer jobs in Bangalore India",
+    "backend frontend developer jobs in Mumbai India",
+    "full stack developer jobs in Hyderabad India",
+    "react node python developer jobs in Delhi India",
+    "devops cloud engineer jobs in Pune India",
+    "data scientist machine learning engineer jobs in India",
+    "java golang developer jobs in Bangalore India",
+    "mobile android ios developer jobs in India",
+    "senior software engineer tech lead jobs in India",
+    "product manager ui ux designer tech jobs in India",
 ]
 
-LOCATIONS = [
-    "Bangalore, India",
-    "Mumbai, India",
-    "Hyderabad, India",
-    "Delhi, India",
-    "Pune, India",
-    "India",           # catch remote / nationally posted roles
-]
-
-_scraper = ScraperService()
-_status: dict = {"lastRun": None, "lastCount": 0, "totalPairs": 0, "errors": []}
+_service = JSearchService()
+_status: dict = {"lastRun": None, "lastCount": 0, "totalQueries": 0, "errors": []}
 
 
 def _ingest(jobs: list) -> int:
@@ -65,38 +56,31 @@ def _ingest(jobs: list) -> int:
 
 
 def run_scrape_job() -> None:
-    logger.info("[scheduler] Scrape started — %d terms × %d locations × %d results/site",
-                len(SEARCH_TERMS), len(LOCATIONS), RESULTS_PER_SITE)
+    logger.info("[scheduler] JSearch scrape started — %d queries × %d page(s)",
+                len(QUERIES), NUM_PAGES)
 
     total_inserted = 0
     errors: list[str] = []
-    pairs_done = 0
+    queries_done = 0
 
-    for location in LOCATIONS:
-        for term in SEARCH_TERMS:
-            try:
-                jobs = _scraper.scrape(
-                    search_term=term,
-                    location=location,
-                    results_per_site=RESULTS_PER_SITE,
-                    country_indeed="India",
-                )
-                inserted = _ingest(jobs)
-                total_inserted += inserted
-                pairs_done += 1
-                logger.info("  [%s / %s] scraped %d → inserted %d",
-                            term, location, len(jobs), inserted)
-            except Exception as exc:
-                msg = f"{term} @ {location}: {exc}"
-                errors.append(msg)
-                logger.error("  Error — %s", msg)
+    for query in QUERIES:
+        try:
+            jobs = _service.search(query, num_pages=NUM_PAGES)
+            inserted = _ingest(jobs)
+            total_inserted += inserted
+            queries_done += 1
+            logger.info("  [%s] → %d inserted", query[:50], inserted)
+        except Exception as exc:
+            msg = f"{query[:50]}: {exc}"
+            errors.append(msg)
+            logger.error("  Error — %s", msg)
 
-    _status["lastRun"]    = datetime.datetime.utcnow().isoformat()
-    _status["lastCount"]  = total_inserted
-    _status["totalPairs"] = pairs_done
-    _status["errors"]     = errors[-10:]
-    logger.info("[scheduler] Done — %d jobs inserted across %d pairs",
-                total_inserted, pairs_done)
+    _status["lastRun"]      = datetime.datetime.utcnow().isoformat()
+    _status["lastCount"]    = total_inserted
+    _status["totalQueries"] = queries_done
+    _status["errors"]       = errors[-10:]
+    logger.info("[scheduler] Done — %d jobs inserted from %d queries",
+                total_inserted, queries_done)
 
 
 def get_status() -> dict:
@@ -109,10 +93,11 @@ def start_scheduler() -> BackgroundScheduler:
         run_scrape_job,
         trigger=IntervalTrigger(minutes=INTERVAL_MINUTES),
         id="scrape_job",
-        name="JobSpy India scraper",
+        name="JSearch India scraper",
         replace_existing=True,
         max_instances=1,
     )
     scheduler.start()
-    logger.info("Scheduler started — every %d min", INTERVAL_MINUTES)
+    logger.info("Scheduler started — every %d min, %d queries per run",
+                INTERVAL_MINUTES, len(QUERIES))
     return scheduler

@@ -1,5 +1,5 @@
 """
-JobSpy Scraper Microservice
+JSearch Scraper Microservice
 FastAPI app — exposes HTTP endpoints for the backend to trigger or monitor scrapes.
 """
 
@@ -8,8 +8,7 @@ import os
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, BackgroundTasks, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI, BackgroundTasks
 
 load_dotenv()
 
@@ -20,30 +19,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 from scheduler import start_scheduler, run_scrape_job, get_status
-from scraper_service import ScraperService
+from jsearch_service import JSearchService
 
 _scheduler = None
-_scraper = ScraperService()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _scheduler
     _scheduler = start_scheduler()
-    logger.info("Scraper service started")
+    logger.info("JSearch scraper service started")
     yield
     if _scheduler and _scheduler.running:
         _scheduler.shutdown(wait=False)
     logger.info("Scraper service stopped")
 
 
-app = FastAPI(title="JobAI Scraper", version="1.0.0", lifespan=lifespan)
-
-
-class ScrapeRequest(BaseModel):
-    search_term: str = "software engineer"
-    location: str = "United States"
-    results_per_site: int = 25
+app = FastAPI(title="3ranga JSearch Scraper", version="2.0.0", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -63,15 +55,12 @@ async def trigger_scrape(background_tasks: BackgroundTasks):
     return {"message": "Scrape job triggered"}
 
 
-@app.post("/scrape/search")
-def search_scrape(req: ScrapeRequest):
-    """Scrape a specific search term synchronously (for testing)."""
-    jobs = _scraper.scrape(
-        search_term=req.search_term,
-        location=req.location,
-        results_per_site=req.results_per_site,
-    )
-    return {"count": len(jobs), "jobs": jobs[:10]}  # preview first 10
+@app.get("/scrape/test")
+def test_scrape():
+    """Quick test — fetch 1 query and return raw results (no DB write)."""
+    svc = JSearchService()
+    jobs = svc.search("software engineer jobs in Bangalore India", num_pages=1)
+    return {"count": len(jobs), "sample": jobs[:3]}
 
 
 if __name__ == "__main__":
