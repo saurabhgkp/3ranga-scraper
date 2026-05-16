@@ -122,8 +122,6 @@ class ScraperService:
                 extra: dict = {}
                 if source == "indeed":
                     extra["country_indeed"] = country_indeed
-                if source == "linkedin":
-                    extra["linkedin_fetch_description"] = True
                 df = scrape_jobs(
                     site_name=[source],
                     search_term=search_term,
