@@ -15,60 +15,36 @@ from scraper_service import ScraperService
 
 logger = logging.getLogger(__name__)
 
-BACKEND_URL   = os.getenv("BACKEND_URL",   "http://localhost:4000")
-INGEST_SECRET = os.getenv("INGEST_SECRET", "internal-scraper-secret")
-INTERVAL_MINUTES  = int(os.getenv("SCRAPE_INTERVAL_MINUTES",  "240"))
-RESULTS_PER_SITE  = int(os.getenv("SCRAPE_RESULTS_PER_SITE",  "50"))
+BACKEND_URL      = os.getenv("BACKEND_URL",              "http://localhost:4000")
+INGEST_SECRET    = os.getenv("INGEST_SECRET",            "internal-scraper-secret")
+INTERVAL_MINUTES = int(os.getenv("SCRAPE_INTERVAL_MINUTES", "240"))
+RESULTS_PER_SITE = int(os.getenv("SCRAPE_RESULTS_PER_SITE", "15"))
 
-# ── Search matrix ──────────────────────────────────────────────────────────────
-# Every (term, location) pair is scraped independently so we cover both
-# role-specific and city-specific results without blowing up API limits.
+# ── Focused search matrix ──────────────────────────────────────────────────────
+# Kept intentionally small so linkedin_fetch_description=True (which makes one
+# extra HTTP request per job) stays under ~1,000 description fetches per run.
+# 10 terms × 6 locations × 15 results × 3 sites = 2,700 raw → ~800–1,200 unique
 
 SEARCH_TERMS = [
-    # Engineering roles
     "software engineer",
     "backend developer",
     "frontend developer",
     "full stack developer",
-    "software developer",
-    "web developer",
-    # Specialisations
     "react developer",
-    "node.js developer",
     "python developer",
-    "java developer",
-    "golang developer",
     "devops engineer",
-    "cloud engineer",
-    "data engineer",
     "data scientist",
     "machine learning engineer",
-    "android developer",
-    "ios developer",
     "mobile developer",
-    # Senior / leadership
-    "senior software engineer",
-    "tech lead",
-    "engineering manager",
-    # Adjacent tech
-    "product manager",
-    "ui ux designer",
-    "QA engineer",
-    "cybersecurity engineer",
-    "blockchain developer",
 ]
 
-# Top Indian tech-hiring cities + broader "India" catch-all
 LOCATIONS = [
     "Bangalore, India",
     "Mumbai, India",
     "Hyderabad, India",
     "Delhi, India",
     "Pune, India",
-    "Chennai, India",
-    "Noida, India",
-    "Gurgaon, India",
-    "India",          # catch remote / nationally posted roles
+    "India",           # catch remote / nationally posted roles
 ]
 
 _scraper = ScraperService()
@@ -76,7 +52,6 @@ _status: dict = {"lastRun": None, "lastCount": 0, "totalPairs": 0, "errors": []}
 
 
 def _ingest(jobs: list) -> int:
-    """POST a batch of jobs to the backend. Returns inserted count."""
     if not jobs:
         return 0
     resp = httpx.post(
@@ -90,9 +65,8 @@ def _ingest(jobs: list) -> int:
 
 
 def run_scrape_job() -> None:
-    """Full scrape pass across all (term, location) pairs."""
-    logger.info("[scheduler] Scrape job started — %d terms × %d locations",
-                len(SEARCH_TERMS), len(LOCATIONS))
+    logger.info("[scheduler] Scrape started — %d terms × %d locations × %d results/site",
+                len(SEARCH_TERMS), len(LOCATIONS), RESULTS_PER_SITE)
 
     total_inserted = 0
     errors: list[str] = []
@@ -112,7 +86,6 @@ def run_scrape_job() -> None:
                 pairs_done += 1
                 logger.info("  [%s / %s] scraped %d → inserted %d",
                             term, location, len(jobs), inserted)
-
             except Exception as exc:
                 msg = f"{term} @ {location}: {exc}"
                 errors.append(msg)
@@ -141,6 +114,5 @@ def start_scheduler() -> BackgroundScheduler:
         max_instances=1,
     )
     scheduler.start()
-    logger.info("Scheduler started — every %d min, %d term × %d location pairs",
-                INTERVAL_MINUTES, len(SEARCH_TERMS), len(LOCATIONS))
+    logger.info("Scheduler started — every %d min", INTERVAL_MINUTES)
     return scheduler
