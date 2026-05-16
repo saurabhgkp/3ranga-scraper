@@ -105,6 +105,7 @@ def run_scrape_job() -> None:
                     search_term=term,
                     location=location,
                     results_per_site=RESULTS_PER_SITE,
+                    country_indeed="India",
                 )
                 inserted = _ingest(jobs)
                 total_inserted += inserted

@@ -105,8 +105,9 @@ class ScraperService:
     def scrape(
         self,
         search_term: str = "software engineer",
-        location: str = "United States",
+        location: str = "India",
         results_per_site: int = 25,
+        country_indeed: str = "India",
     ) -> list[dict[str, Any]]:
         """Scrape all configured sources and return normalised job list."""
         all_jobs: list[dict[str, Any]] = []
@@ -118,12 +119,18 @@ class ScraperService:
         for source in SOURCES:
             try:
                 logger.info("Scraping %s — '%s' in %s", source, search_term, location)
+                extra: dict = {}
+                if source == "indeed":
+                    extra["country_indeed"] = country_indeed
+                if source == "linkedin":
+                    extra["linkedin_fetch_description"] = True
                 df = scrape_jobs(
                     site_name=[source],
                     search_term=search_term,
                     location=location,
                     results_wanted=results_per_site,
-                    hours_old=48,
+                    hours_old=72,
+                    **extra,
                     **proxy_settings,
                 )
                 if df is None or df.empty:
