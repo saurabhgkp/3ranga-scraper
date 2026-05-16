@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 BACKEND_URL      = os.getenv("BACKEND_URL",              "http://localhost:4000")
 INGEST_SECRET    = os.getenv("INGEST_SECRET",            "internal-scraper-secret")
 INTERVAL_MINUTES = int(os.getenv("SCRAPE_INTERVAL_MINUTES", "240"))
-NUM_PAGES        = int(os.getenv("JSEARCH_PAGES_PER_QUERY",  "1"))   # 10 jobs per page
+NUM_PAGES        = int(os.getenv("JSEARCH_PAGES_PER_QUERY",  "10"))  # 10 jobs per page, max=10
 
 # ── Search queries ─────────────────────────────────────────────────────────────
 # Each query = 1 API call = 10 jobs (NUM_PAGES=1).
