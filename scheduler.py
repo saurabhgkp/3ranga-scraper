@@ -54,7 +54,7 @@ JOBSPY_QUERIES = [
     {"search_term": "mobile ios android",        "location": "India"},
 ]
 
-_jsearch_service = JSearchService()
+_jsearch_service = None  # initialised lazily on first run
 _status: dict = {
     "lastRun": None, "lastCount": 0,
     "jsearchInserted": 0, "jobspyInserted": 0,
@@ -76,6 +76,7 @@ def _ingest(jobs: list) -> int:
 
 
 def run_scrape_job() -> None:
+    global _jsearch_service
     logger.info("[scheduler] Scrape started — JSearch (%d queries) + JobSpy (%s)",
                 len(JSEARCH_QUERIES), "enabled" if ENABLE_JOBSPY else "disabled")
 
@@ -86,7 +87,14 @@ def run_scrape_job() -> None:
     jsearch_jobs: list[dict] = []
     jsearch_queries_done = 0
 
-    for query in JSEARCH_QUERIES:
+    try:
+        if _jsearch_service is None:
+            _jsearch_service = JSearchService()
+    except RuntimeError as exc:
+        logger.error("[scheduler] JSearch disabled — %s", exc)
+        errors.append(f"jsearch/init: {exc}")
+
+    for query in JSEARCH_QUERIES if _jsearch_service else []:
         try:
             jobs = _jsearch_service.search(query, num_pages=NUM_PAGES)
             new_jobs = [j for j in jobs if j["titleHash"] not in seen_hashes]
