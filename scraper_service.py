@@ -19,8 +19,8 @@ from deduplicator import job_hash
 logger = logging.getLogger(__name__)
 
 # ── Config ─────────────────────────────────────────────────────────────────────
-RESULTS_WANTED   = int(os.getenv("JOBSPY_RESULTS_PER_SITE", "50"))
-HOURS_OLD        = int(os.getenv("JOBSPY_HOURS_OLD", "24"))
+RESULTS_WANTED   = int(os.getenv("JOBSPY_RESULTS_PER_SITE", "200"))
+HOURS_OLD        = int(os.getenv("JOBSPY_HOURS_OLD", "168"))   # 7 days
 ENABLE_LI_DESC   = os.getenv("JOBSPY_LINKEDIN_DESCRIPTIONS", "false").lower() == "true"
 SITES            = ["indeed", "glassdoor", "linkedin"]
 

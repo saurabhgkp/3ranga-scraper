@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 BACKEND_URL      = os.getenv("BACKEND_URL",              "http://localhost:4000")
 INGEST_SECRET    = os.getenv("INGEST_SECRET",            "internal-scraper-secret")
-INTERVAL_MINUTES = int(os.getenv("SCRAPE_INTERVAL_MINUTES", "240"))
+INTERVAL_MINUTES = int(os.getenv("SCRAPE_INTERVAL_MINUTES", "1440"))
 NUM_PAGES        = int(os.getenv("JSEARCH_PAGES_PER_QUERY",  "10"))  # 10 jobs/page, max=10
 ENABLE_JOBSPY    = os.getenv("ENABLE_JOBSPY", "true").lower() == "true"
 
