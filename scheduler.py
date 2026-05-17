@@ -42,47 +42,87 @@ JSEARCH_QUERIES = [
 
 # ── JobSpy queries (web scraping — Indeed + Glassdoor + LinkedIn) ──────────────
 JOBSPY_QUERIES = [
-    # TECH
+    # ── Core engineering (common title variants) ──────────────────────────
     {"search_term": "Software Engineer"},
+    {"search_term": "Software Developer"},          # different listing pool than "engineer"
+    {"search_term": "SDE"},                         # Amazon / Flipkart style
     {"search_term": "Full Stack Developer"},
     {"search_term": "Backend Developer"},
+    {"search_term": "Backend Engineer"},
     {"search_term": "Frontend Developer"},
+    {"search_term": "Frontend Engineer"},
+    # ── Languages / frameworks ────────────────────────────────────────────
     {"search_term": "Node.js Developer"},
     {"search_term": "React Developer"},
     {"search_term": "Python Developer"},
+    {"search_term": "Python Engineer"},
     {"search_term": "Java Developer"},
+    {"search_term": "Java Engineer"},
     {"search_term": "Go Developer"},
-    {"search_term": "DevOps Engineer"},
-    # QA
-    {"search_term": "QA Engineer"},
-    {"search_term": "Automation Tester"},
-    # DATA
-    {"search_term": "Data Scientist"},
-    {"search_term": "Data Analyst"},
-    {"search_term": "Machine Learning Engineer"},
-    # DESIGN
-    {"search_term": "UI UX Designer"},
-    # PM
-    {"search_term": "Product Manager"},
-    # SALES
-    {"search_term": "Sales Representative"},
-    {"search_term": "Business Development Manager"},
-    # MARKETING
-    {"search_term": "Digital Marketing Manager"},
-    {"search_term": "SEO Specialist"},
-    # HR
-    {"search_term": "HR Recruiter"},
-    {"search_term": "Talent Acquisition Specialist"},
-    # MOBILE
+    {"search_term": "Golang Developer"},
+    {"search_term": "TypeScript Developer"},
+    {"search_term": "PHP Developer"},
+    {"search_term": "Ruby on Rails Developer"},
+    {"search_term": "Spring Boot Developer"},
+    # ── Mobile ───────────────────────────────────────────────────────────
     {"search_term": "Android Developer"},
     {"search_term": "iOS Developer"},
-    # CLOUD
-    {"search_term": "Cloud Engineer AWS"},
-    {"search_term": "Kubernetes DevOps Engineer"},
-    # SENIOR
-    {"search_term": "Senior Software Engineer"},
+    {"search_term": "Flutter Developer"},
+    {"search_term": "React Native Developer"},
+    # ── Infra / Cloud / DevOps ────────────────────────────────────────────
+    {"search_term": "DevOps Engineer"},
+    {"search_term": "Platform Engineer"},
+    {"search_term": "Site Reliability Engineer"},
+    {"search_term": "Cloud Engineer"},
+    {"search_term": "AWS Solutions Architect"},
+    {"search_term": "Kubernetes Engineer"},
+    # ── Data / AI / ML ────────────────────────────────────────────────────
+    {"search_term": "Data Scientist"},
+    {"search_term": "Data Engineer"},
+    {"search_term": "Data Analyst"},
+    {"search_term": "Machine Learning Engineer"},
+    {"search_term": "AI Engineer"},
+    {"search_term": "LLM Engineer"},
+    {"search_term": "Business Intelligence Analyst"},
+    # ── QA ───────────────────────────────────────────────────────────────
+    {"search_term": "QA Engineer"},
+    {"search_term": "SDET"},
+    {"search_term": "Automation Test Engineer"},
+    {"search_term": "Manual Tester"},
+    # ── Design ───────────────────────────────────────────────────────────
+    {"search_term": "UI UX Designer"},
+    {"search_term": "Product Designer"},
+    # ── Product / Management ──────────────────────────────────────────────
+    {"search_term": "Product Manager"},
     {"search_term": "Engineering Manager"},
     {"search_term": "Tech Lead"},
+    {"search_term": "Scrum Master"},
+    {"search_term": "Business Analyst"},
+    {"search_term": "Project Manager IT"},
+    # ── Senior / Lead roles ───────────────────────────────────────────────
+    {"search_term": "Senior Software Engineer"},
+    {"search_term": "Senior Developer"},
+    {"search_term": "Principal Engineer"},
+    {"search_term": "Staff Engineer"},
+    {"search_term": "Solutions Architect"},
+    # ── Non-tech ─────────────────────────────────────────────────────────
+    {"search_term": "HR Recruiter"},
+    {"search_term": "Talent Acquisition Specialist"},
+    {"search_term": "Sales Representative"},
+    {"search_term": "Business Development Manager"},
+    {"search_term": "Account Manager"},
+    {"search_term": "Digital Marketing Manager"},
+    {"search_term": "SEO Specialist"},
+    {"search_term": "Content Writer"},
+    # ── Entry level / fresher ─────────────────────────────────────────────
+    {"search_term": "Junior Software Developer"},
+    {"search_term": "Software Engineer Fresher"},
+    {"search_term": "Associate Software Engineer"},
+    {"search_term": "Graduate Software Engineer"},
+    {"search_term": "Software Engineering Intern"},
+    # ── Security ─────────────────────────────────────────────────────────
+    {"search_term": "Security Engineer"},
+    {"search_term": "Cybersecurity Analyst"},
 ]
 
 _jsearch_service = None  # initialised lazily on first run
