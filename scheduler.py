@@ -14,7 +14,9 @@ Hardcoded lists below serve as a fallback if the fetch fails.
 
 import datetime
 import logging
+import math
 import os
+import time
 
 import httpx
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -26,9 +28,10 @@ logger = logging.getLogger(__name__)
 
 BACKEND_URL      = os.getenv("BACKEND_URL",              "http://localhost:4000")
 INGEST_SECRET    = os.getenv("INGEST_SECRET",            "internal-scraper-secret")
-INTERVAL_MINUTES = int(os.getenv("SCRAPE_INTERVAL_MINUTES", "1440"))
+INTERVAL_MINUTES = int(os.getenv("SCRAPE_INTERVAL_MINUTES", "240"))
 NUM_PAGES        = int(os.getenv("JSEARCH_PAGES_PER_QUERY",  "10"))  # 10 jobs/page, max=10
 ENABLE_JOBSPY    = os.getenv("ENABLE_JOBSPY", "true").lower() == "true"
+TERMS_PER_RUN    = int(os.getenv("JOBSPY_TERMS_PER_RUN", "35"))  # jobspy terms per rotation slot
 
 # ── Hardcoded fallback terms (used only when backend fetch fails) ──────────────
 _FALLBACK_JSEARCH = [
@@ -202,6 +205,16 @@ def run_scrape_job() -> None:
 
     # ── Load search terms from DB (falls back to hardcoded on error) ──────────
     jsearch_queries, jobspy_queries = _fetch_search_terms()
+
+    # ── Rotate jobspy terms: pick a time-based slice so each run covers a
+    #    different subset; full list cycles every ~24 h at 4-h intervals ──────
+    if jobspy_queries and TERMS_PER_RUN < len(jobspy_queries):
+        num_slots  = math.ceil(len(jobspy_queries) / TERMS_PER_RUN)
+        slot       = int(time.time() / (INTERVAL_MINUTES * 60)) % num_slots
+        start      = slot * TERMS_PER_RUN
+        jobspy_queries = (jobspy_queries + jobspy_queries)[start: start + TERMS_PER_RUN]
+        logger.info("[scheduler] JobSpy rotation: slot %d/%d → %d terms",
+                    slot + 1, num_slots, len(jobspy_queries))
 
     logger.info("[scheduler] Scrape started — JSearch (%d queries) + JobSpy (%s, %d queries)",
                 len(jsearch_queries), "on" if ENABLE_JOBSPY else "off", len(jobspy_queries))
