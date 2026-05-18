@@ -258,20 +258,27 @@ def run_scrape_job() -> None:
         try:
             from scraper_service import ScraperService
             scraper = ScraperService()
-            jobspy_jobs = scraper.scrape_all(
+
+            def _on_batch(batch_jobs: list) -> None:
+                """Ingest each batch immediately so DB updates progressively."""
+                global jobspy_inserted
+                new = [j for j in batch_jobs if j["titleHash"] not in seen_hashes]
+                for j in new:
+                    seen_hashes.add(j["titleHash"])
+                if new:
+                    inserted = _ingest(new)
+                    jobspy_inserted += inserted
+                    logger.info("[scheduler] Batch ingested — %d new jobs (total so far: %d)",
+                                inserted, jobspy_inserted)
+
+            scraper.scrape_all(
                 queries=jobspy_queries,
                 location="India",
                 country_indeed="India",
                 batch_size=5,
+                on_batch=_on_batch,
             )
-            # filter out hashes already covered by JSearch
-            new_jobspy = [j for j in jobspy_jobs if j["titleHash"] not in seen_hashes]
-            for j in new_jobspy:
-                seen_hashes.add(j["titleHash"])
-
-            jobspy_inserted = _ingest(new_jobspy)
-            logger.info("[scheduler] JobSpy done — %d inserted (%d dupes skipped)",
-                        jobspy_inserted, len(jobspy_jobs) - len(new_jobspy))
+            logger.info("[scheduler] JobSpy done — %d total inserted", jobspy_inserted)
 
         except ImportError as exc:
             logger.warning("[scheduler] JobSpy unavailable: %s", exc)

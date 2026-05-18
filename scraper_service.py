@@ -223,10 +223,12 @@ class ScraperService:
         country_indeed: str = "India",
         batch_size: int = 5,
         batch_delay: tuple[float, float] = (3.0, 6.0),
+        on_batch: Any = None,
     ) -> list[dict[str, Any]]:
         """
         Run all queries across all sites with batching and deduplication.
-        queries: list of {"search_term": str} dicts.
+        on_batch: optional callable(batch_jobs) called after each batch completes
+                  so the caller can ingest progressively rather than all at once.
         """
         all_jobs: list[dict[str, Any]] = []
         seen_hashes: set[str] = set()
@@ -237,6 +239,8 @@ class ScraperService:
             batch = queries[batch_idx: batch_idx + batch_size]
             logger.info("  [jobspy] batch %d/%d (%d terms)",
                         batch_idx // batch_size + 1, batch_count, len(batch))
+
+            batch_jobs: list[dict[str, Any]] = []
 
             for term_idx, q in enumerate(batch):
                 global_idx = batch_idx + term_idx
@@ -253,6 +257,7 @@ class ScraperService:
                             job = _normalise_row(row, site)
                             if job and job["titleHash"] not in seen_hashes:
                                 seen_hashes.add(job["titleHash"])
+                                batch_jobs.append(job)
                                 all_jobs.append(job)
                         except Exception as exc:
                             logger.debug("normalise error: %s", exc)
@@ -260,6 +265,13 @@ class ScraperService:
                 # short pause between terms
                 if term_idx < len(batch) - 1:
                     time.sleep(random.uniform(1.0, 2.0))
+
+            # ingest this batch immediately if callback provided
+            if on_batch and batch_jobs:
+                try:
+                    on_batch(batch_jobs)
+                except Exception as exc:
+                    logger.error("  [jobspy] on_batch ingest error: %s", exc)
 
             # longer pause between batches
             if batch_idx + batch_size < len(queries):
