@@ -135,7 +135,7 @@ class JSearchService:
                 timeout=30,
             )
             resp.raise_for_status()
-            raw_jobs = resp.json().get("data", {}).get("jobs", [])
+            raw_jobs = resp.json().get("data", [])
         except Exception as exc:
             logger.error("JSearch request failed for '%s': %s", query, exc)
             return []
