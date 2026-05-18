@@ -22,7 +22,8 @@ logger = logging.getLogger(__name__)
 RESULTS_WANTED   = int(os.getenv("JOBSPY_RESULTS_PER_SITE", "200"))
 HOURS_OLD        = int(os.getenv("JOBSPY_HOURS_OLD", "168"))   # 7 days
 ENABLE_LI_DESC   = os.getenv("JOBSPY_LINKEDIN_DESCRIPTIONS", "false").lower() == "true"
-SITES            = ["indeed", "glassdoor", "linkedin"]
+_sites_env       = os.getenv("JOBSPY_SITES", "indeed,linkedin")
+SITES            = [s.strip() for s in _sites_env.split(",") if s.strip()]
 
 # ── User-agent rotation ────────────────────────────────────────────────────────
 USER_AGENTS = [
@@ -209,6 +210,7 @@ def _normalise_row(row: pd.Series, source: str) -> dict[str, Any] | None:
         "datePosted":  date_posted.isoformat(),
         "isRemote":    bool(row.get("is_remote", False)),
         "salary":      salary,
+        "externalId":  str(row.get("id", "") or ""),
         "titleHash":   job_hash(title, company, location),
     }
 
