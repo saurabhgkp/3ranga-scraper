@@ -261,7 +261,7 @@ def run_scrape_job() -> None:
 
             def _on_batch(batch_jobs: list) -> None:
                 """Ingest each batch immediately so DB updates progressively."""
-                global jobspy_inserted
+                nonlocal jobspy_inserted
                 new = [j for j in batch_jobs if j["titleHash"] not in seen_hashes]
                 for j in new:
                     seen_hashes.add(j["titleHash"])
