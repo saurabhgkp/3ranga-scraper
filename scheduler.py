@@ -31,7 +31,9 @@ INGEST_SECRET    = os.getenv("INGEST_SECRET",            "internal-scraper-secre
 INTERVAL_MINUTES = int(os.getenv("SCRAPE_INTERVAL_MINUTES", "240"))
 NUM_PAGES        = int(os.getenv("JSEARCH_PAGES_PER_QUERY",  "10"))  # 10 jobs/page, max=10
 ENABLE_JOBSPY    = os.getenv("ENABLE_JOBSPY", "true").lower() == "true"
-TERMS_PER_RUN    = int(os.getenv("JOBSPY_TERMS_PER_RUN", "35"))  # jobspy terms per rotation slot
+TERMS_PER_RUN    = int(os.getenv("JOBSPY_TERMS_PER_RUN", "35"))   # jobspy terms per rotation slot
+NUM_PARTS        = int(os.getenv("JOBSPY_NUM_PARTS",      "4"))    # split terms into N sequential parts
+PART_COOLING_MIN = int(os.getenv("JOBSPY_PART_COOLING_MIN", "15")) # minutes to cool between parts
 
 # ── Hardcoded fallback terms (used only when backend fetch fails) ──────────────
 _FALLBACK_JSEARCH = [
@@ -251,34 +253,71 @@ def run_scrape_job() -> None:
     logger.info("[scheduler] JSearch done — %d inserted from %d queries",
                 jsearch_inserted, jsearch_queries_done)
 
-    # ── Phase 2: JobSpy ───────────────────────────────────────────────────────
-    jobspy_inserted = 0
+    # ── Phase 2: JobSpy — split into NUM_PARTS sequential chunks ─────────────
+    #
+    # Running all terms in one block from a single IP triggers LinkedIn/Indeed
+    # rate-limiting quickly.  Splitting into parts with a PART_COOLING_MIN break
+    # between each lets the sources' rate-limit windows reset, recovering yield.
+    # (Observed: 1,597 new jobs in a 4-part run vs. ~0 in a single continuous run.)
+    jobspy_inserted  = 0
+    part_inserted    = 0   # reset each part for per-part log line
 
     if ENABLE_JOBSPY:
         try:
             from scraper_service import ScraperService
             scraper = ScraperService()
 
-            def _on_batch(batch_jobs: list) -> None:
-                """Ingest each batch immediately so DB updates progressively."""
-                nonlocal jobspy_inserted
-                new = [j for j in batch_jobs if j["titleHash"] not in seen_hashes]
-                for j in new:
-                    seen_hashes.add(j["titleHash"])
-                if new:
-                    inserted = _ingest(new)
-                    jobspy_inserted += inserted
-                    logger.info("[scheduler] Batch ingested — %d new jobs (total so far: %d)",
-                                inserted, jobspy_inserted)
+            # Split term list into NUM_PARTS equal chunks
+            chunk_size   = math.ceil(len(jobspy_queries) / NUM_PARTS) if jobspy_queries else 1
+            parts        = [jobspy_queries[i: i + chunk_size]
+                            for i in range(0, len(jobspy_queries), chunk_size)]
+            total_parts  = len(parts)
 
-            scraper.scrape_all(
-                queries=jobspy_queries,
-                location="India",
-                country_indeed="India",
-                batch_size=5,
-                on_batch=_on_batch,
-            )
-            logger.info("[scheduler] JobSpy done — %d total inserted", jobspy_inserted)
+            for part_idx, part_queries in enumerate(parts):
+                part_num     = part_idx + 1
+                part_inserted = 0
+
+                logger.info("[scheduler] PART %d/%d — %d terms — sites: %s",
+                            part_num, total_parts, len(part_queries),
+                            os.getenv("JOBSPY_SITES", "indeed,linkedin"))
+
+                def _on_batch(batch_jobs: list, _pn: int = part_num) -> None:
+                    """Ingest each batch immediately; log part + run totals."""
+                    nonlocal jobspy_inserted, part_inserted
+                    new = [j for j in batch_jobs if j["titleHash"] not in seen_hashes]
+                    for j in new:
+                        seen_hashes.add(j["titleHash"])
+                    if new:
+                        inserted      = _ingest(new)
+                        jobspy_inserted += inserted
+                        part_inserted  += inserted
+                        logger.info(
+                            "  ✓ Batch ingested — +%d new (part total: %d | run total: %d)",
+                            inserted, part_inserted, jobspy_inserted,
+                        )
+
+                scraper.scrape_all(
+                    queries=part_queries,
+                    location="India",
+                    country_indeed="India",
+                    batch_size=5,
+                    on_batch=_on_batch,
+                )
+
+                logger.info("[scheduler] PART %d/%d done — %d new jobs inserted",
+                            part_num, total_parts, part_inserted)
+
+                # Cooling break between parts — skip after the last part
+                if part_idx < total_parts - 1:
+                    cooling_secs = PART_COOLING_MIN * 60
+                    logger.info(
+                        "[scheduler] Cooling %d min before part %d/%d...",
+                        PART_COOLING_MIN, part_num + 1, total_parts,
+                    )
+                    time.sleep(cooling_secs)
+
+            logger.info("[scheduler] JobSpy done — %d total inserted across %d parts",
+                        jobspy_inserted, total_parts)
 
         except ImportError as exc:
             logger.warning("[scheduler] JobSpy unavailable: %s", exc)
