@@ -25,6 +25,16 @@ ENABLE_LI_DESC   = os.getenv("JOBSPY_LINKEDIN_DESCRIPTIONS", "false").lower() ==
 _sites_env       = os.getenv("JOBSPY_SITES", "indeed,linkedin")
 SITES            = [s.strip() for s in _sites_env.split(",") if s.strip()]
 
+# ── Human-like delay config (all values in seconds) ───────────────────────────
+DELAY_MIN        = float(os.getenv("SCRAPER_DELAY_MIN",    "3.0"))   # min pause between requests
+DELAY_MAX        = float(os.getenv("SCRAPER_DELAY_MAX",    "7.0"))   # max pause between requests
+BACKOFF_BASE     = float(os.getenv("SCRAPER_BACKOFF_BASE", "2.5"))   # exponential base on rate-limit
+MAX_BACKOFF      = float(os.getenv("SCRAPER_MAX_BACKOFF",  "90.0"))  # hard cap on any single sleep
+TERM_DELAY_MIN   = float(os.getenv("SCRAPER_TERM_DELAY_MIN", "4.0")) # pause between search terms
+TERM_DELAY_MAX   = float(os.getenv("SCRAPER_TERM_DELAY_MAX", "9.0")) # pause between search terms
+BATCH_DELAY_MIN  = float(os.getenv("SCRAPER_BATCH_DELAY_MIN", "15.0")) # pause between batches
+BATCH_DELAY_MAX  = float(os.getenv("SCRAPER_BATCH_DELAY_MAX", "30.0")) # pause between batches
+
 # ── User-agent rotation ────────────────────────────────────────────────────────
 USER_AGENTS = [
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -100,17 +110,39 @@ def _proxy_for(term_idx: int, site_idx: int) -> Optional[str]:
     return PROXIES[(term_idx + site_idx) % len(PROXIES)]
 
 
+def _human_delay(min_s: float, max_s: float, label: str) -> None:
+    """Sleep a randomized duration and log it so operators can monitor pacing."""
+    duration = random.uniform(min_s, max_s)
+    logger.info("    [delay] %s — sleeping %.1fs", label, duration)
+    time.sleep(duration)
+
+
+def _backoff_delay(attempt: int, label: str) -> None:
+    """Exponential backoff with jitter, capped at MAX_BACKOFF."""
+    base = DELAY_MIN * (BACKOFF_BASE ** attempt)
+    jitter = random.uniform(0.5, 2.5)
+    duration = min(base + jitter, MAX_BACKOFF)
+    logger.warning("    [backoff] %s — attempt %d, sleeping %.1fs (base=%.1f jitter=%.1f)",
+                   label, attempt + 1, duration, base, jitter)
+    time.sleep(duration)
+
+
 def _safe_scrape(site: str, search_term: str, term_idx: int, site_idx: int,
                  location: str = "India", country_indeed: str = "India") -> pd.DataFrame:
-    """Scrape one site with UA rotation, proxy, and 4-attempt backoff."""
+    """Scrape one site/term with human-like delays and exponential backoff on rate limits."""
     max_retries = 4
-    backoff = [2, 5, 10]
+    low_count_streak = 0  # track consecutive low-result responses (rate-limit signal)
 
     for attempt in range(max_retries):
-        try:
-            delay = random.uniform(1.5, 3.0) * (1.5 ** attempt)
-            time.sleep(delay)
+        # ── Human-like pre-request pause ─────────────────────────────────────
+        if attempt == 0:
+            _human_delay(DELAY_MIN, DELAY_MAX,
+                         f"{site}/'{search_term[:40]}'")
+        else:
+            # Exponential backoff — longer each retry
+            _backoff_delay(attempt, f"{site}/'{search_term[:40]}'")
 
+        try:
             proxy = _proxy_for(term_idx, site_idx)
             params: dict[str, Any] = {
                 "site_name":      [site],
@@ -130,23 +162,37 @@ def _safe_scrape(site: str, search_term: str, term_idx: int, site_idx: int,
 
             df = scrape_jobs(**params)
 
-            if df is not None and not df.empty:
-                logger.info("    [jobspy/%s] '%s' → %d rows (attempt %d)",
-                            site, search_term, len(df), attempt + 1)
-                # retry if suspiciously low and we have attempts left
-                if len(df) < 5 and attempt < max_retries - 1:
-                    logger.warning("    low count, retrying...")
+            if df is None or df.empty:
+                logger.info("    [jobspy/%s] '%s' → 0 rows (attempt %d)",
+                            site, search_term[:40], attempt + 1)
+                low_count_streak += 1
+            elif len(df) < 5:
+                # Suspiciously low → probable rate-limit or soft block
+                low_count_streak += 1
+                logger.warning(
+                    "    [jobspy/%s] '%s' → %d rows — likely rate-limited "
+                    "(streak=%d, attempt %d/%d)",
+                    site, search_term[:40], len(df), low_count_streak, attempt + 1, max_retries,
+                )
+                if attempt < max_retries - 1:
+                    # Treat low count as a rate-limit signal; backoff before retry
+                    _backoff_delay(attempt + low_count_streak, f"low-count/{site}")
                     continue
+                # Last attempt — return whatever we got
+                return df
+            else:
+                logger.info("    [jobspy/%s] '%s' → %d rows (attempt %d)",
+                            site, search_term[:40], len(df), attempt + 1)
                 return df
 
-            logger.info("    [jobspy/%s] '%s' → 0 rows", site, search_term)
-
         except Exception as exc:
-            logger.warning("    [jobspy/%s] attempt %d error: %s", site, attempt + 1, exc)
+            logger.warning("    [jobspy/%s] attempt %d error: %s",
+                           site, attempt + 1, exc)
             if attempt < max_retries - 1:
-                time.sleep(backoff[attempt])
+                _backoff_delay(attempt, f"error/{site}")
             else:
-                logger.error("    [jobspy/%s] failed after %d attempts", site, max_retries)
+                logger.error("    [jobspy/%s] '%s' failed after %d attempts",
+                             site, search_term[:40], max_retries)
 
     return pd.DataFrame()
 
@@ -222,13 +268,12 @@ class ScraperService:
         location: str = "India",
         country_indeed: str = "India",
         batch_size: int = 5,
-        batch_delay: tuple[float, float] = (3.0, 6.0),
+        batch_delay: tuple[float, float] = (BATCH_DELAY_MIN, BATCH_DELAY_MAX),
         on_batch: Any = None,
     ) -> list[dict[str, Any]]:
         """
-        Run all queries across all sites with batching and deduplication.
-        on_batch: optional callable(batch_jobs) called after each batch completes
-                  so the caller can ingest progressively rather than all at once.
+        Run all queries across all sites with batching, human-like pacing, and deduplication.
+        on_batch: optional callable(batch_jobs) called after each batch completes.
         """
         all_jobs: list[dict[str, Any]] = []
         seen_hashes: set[str] = set()
@@ -237,8 +282,9 @@ class ScraperService:
 
         for batch_idx in range(0, len(queries), batch_size):
             batch = queries[batch_idx: batch_idx + batch_size]
-            logger.info("  [jobspy] batch %d/%d (%d terms)",
-                        batch_idx // batch_size + 1, batch_count, len(batch))
+            current_batch = batch_idx // batch_size + 1
+            logger.info("  [jobspy] batch %d/%d (%d terms) — sites: %s",
+                        current_batch, batch_count, len(batch), ", ".join(SITES))
 
             batch_jobs: list[dict[str, Any]] = []
 
@@ -262,22 +308,22 @@ class ScraperService:
                         except Exception as exc:
                             logger.debug("normalise error: %s", exc)
 
-                # short pause between terms
+                # Human-like pause between search terms
                 if term_idx < len(batch) - 1:
-                    time.sleep(random.uniform(1.0, 2.0))
+                    _human_delay(TERM_DELAY_MIN, TERM_DELAY_MAX,
+                                 f"between terms ({term_idx + 1}/{len(batch)})")
 
-            # ingest this batch immediately if callback provided
+            # Ingest this batch immediately if callback provided
             if on_batch and batch_jobs:
                 try:
                     on_batch(batch_jobs)
                 except Exception as exc:
                     logger.error("  [jobspy] on_batch ingest error: %s", exc)
 
-            # longer pause between batches
+            # Longer human-like pause between batches
             if batch_idx + batch_size < len(queries):
-                pause = random.uniform(*batch_delay)
-                logger.info("  [jobspy] batch done — sleeping %.1fs", pause)
-                time.sleep(pause)
+                _human_delay(batch_delay[0], batch_delay[1],
+                             f"between batches ({current_batch}/{batch_count})")
 
         logger.info("  [jobspy] total unique jobs: %d", len(all_jobs))
         return all_jobs
