@@ -104,6 +104,20 @@ def extract_skills(text: str) -> list[str]:
     return sorted(set(m.lower() for m in SKILL_RE.findall(str(text))))
 
 
+# Keywords that signal seniority level — checked against job title
+_ENTRY_WORDS  = {"junior", "jr", "entry", "fresher", "graduate", "intern", "trainee", "associate"}
+_SENIOR_WORDS = {"senior", "sr", "lead", "principal", "staff", "architect",
+                 "head", "vp", "director", "manager", "distinguished"}
+
+def _infer_experience(title: str) -> str:
+    words = set(re.sub(r"[^a-z ]", " ", title.lower()).split())
+    if words & _ENTRY_WORDS:
+        return "entry"
+    if words & _SENIOR_WORDS:
+        return "senior"
+    return "mid"
+
+
 def _proxy_for(term_idx: int, site_idx: int) -> Optional[str]:
     if not PROXIES:
         return None
@@ -197,7 +211,7 @@ def _safe_scrape(site: str, search_term: str, term_idx: int, site_idx: int,
     return pd.DataFrame()
 
 
-def _normalise_row(row: pd.Series, source: str) -> dict[str, Any] | None:
+def _normalise_row(row: pd.Series, source: str, search_term: str = "") -> dict[str, Any] | None:
     title   = str(row.get("title",   "") or "").strip()
     company = str(row.get("company", "") or "").strip()
     if not title or not company:
@@ -244,20 +258,38 @@ def _normalise_row(row: pd.Series, source: str) -> dict[str, Any] | None:
     if pd.notna(interval) and interval:
         salary["interval"] = str(interval).lower()
 
+    # Combine all available text for richer skill extraction (critical for LinkedIn without descriptions)
+    skill_text = " ".join(filter(None, [title, description, search_term]))
+    skills = extract_skills(skill_text)
+
+    # Synthesize minimal description when empty so AI scorer has something to work with
+    if not description:
+        parts = [f"{title} position at {company}."]
+        if location:
+            parts.append(f"Based in {location}.")
+        if job_type:
+            parts.append(f"Employment type: {job_type}.")
+        if skills:
+            parts.append(f"Required skills: {', '.join(skills)}.")
+        elif search_term:
+            parts.append(f"Role: {search_term}.")
+        description = " ".join(parts)
+
     return {
-        "title":       title,
-        "company":     company,
-        "location":    location,
-        "description": description,
-        "skills":      extract_skills(description),
-        "jobType":     job_type,
-        "source":      source,
-        "applyUrl":    str(row.get("job_url", "") or ""),
-        "datePosted":  date_posted.isoformat(),
-        "isRemote":    bool(row.get("is_remote", False)),
-        "salary":      salary,
-        "externalId":  str(row.get("id", "") or ""),
-        "titleHash":   job_hash(title, company, location),
+        "title":           title,
+        "company":         company,
+        "location":        location,
+        "description":     description,
+        "skills":          skills,
+        "experienceLevel": _infer_experience(title),
+        "jobType":         job_type,
+        "source":          source,
+        "applyUrl":        str(row.get("job_url", "") or ""),
+        "datePosted":      date_posted.isoformat(),
+        "isRemote":        bool(row.get("is_remote", False)),
+        "salary":          salary,
+        "externalId":      str(row.get("id", "") or ""),
+        "titleHash":       job_hash(title, company, location),
     }
 
 
@@ -300,7 +332,7 @@ class ScraperService:
 
                     for _, row in df.iterrows():
                         try:
-                            job = _normalise_row(row, site)
+                            job = _normalise_row(row, site, search_term=search_term)
                             if job and job["titleHash"] not in seen_hashes:
                                 seen_hashes.add(job["titleHash"])
                                 batch_jobs.append(job)
